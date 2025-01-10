@@ -1,0 +1,30 @@
+---
+title: "Linking Pipeline"
+format: html
+editor: visual
+---
+
+# Link ESM to Phone Use Data
+
+This data processing pipeline links ESM data to the phone use data. The goal is a dataset that contains the ESM data per beep and then per beep also the phone use (per smartphone pp category) within the hour before the respective beep of the participants.
+
+The pipeline performs the following steps
+
+1.  Read the ESM dataset (ESD) which is to be enriched with the phone use data
+2.  Read the category dataset, which identifies a category per specific phone app
+3.  Read the phone use datasets (PUD) and merges them into one single dataset
+4.  Per beep in the ESD
+    1.  Filters the PUD for all app use events for that participant and for the allowed time window before the beep (1 hour)
+    2.  Interpret the filtered PUD dataset, apply the app category of each app use
+    3.  Compute usage time and app open frequency per app category
+5.   Merge all processed PUD sub-datasets into one new one
+6.  Join the ESM dataset witht he processed PUD
+
+```{r}
+library(dplyr)
+library(readr)
+```
+
+```{r}
+five_daily <- read_csv("data/cleaned_phone_use_noLOC/data/five_daily.csv")
+```
