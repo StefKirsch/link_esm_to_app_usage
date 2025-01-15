@@ -1,30 +1,265 @@
 ---
-title: "Linking Pipeline"
+title: "Data Linking Pipeline"
 format: html
 editor: visual
 ---
 
-# Link ESM to Phone Use Data
+## Link ESM to Phone Use Data
 
-This data processing pipeline links ESM data to the phone use data. The goal is a dataset that contains the ESM data per beep and then per beep also the phone use (per smartphone pp category) within the hour before the respective beep of the participants.
+> This does not work as we do the operations on the largest possible dataset all at once. What we should do instead, is doing all the operations per participant, so we can go through the app usage beep by beep safely. We can even store the temp intermediate data somewhere to remove it at a later stage. Let's see what works best on my hardware.
+>
+> Maybe what I should try before is using lazy dts first :D
 
-The pipeline performs the following steps
+This data processing pipeline links ESM data to the phone use data. The goal is a dataset that contains the ESM data per beep and then, for each beep, also the phone use (per smartphone app category) within the hour before the respective beep of the participants.
 
-1.  Read the ESM dataset (ESD) which is to be enriched with the phone use data
-2.  Read the category dataset, which identifies a category per specific phone app
-3.  Read the phone use datasets (PUD) and merges them into one single dataset
-4.  Per beep in the ESD
-    1.  Filters the PUD for all app use events for that participant and for the allowed time window before the beep (1 hour)
-    2.  Interpret the filtered PUD dataset, apply the app category of each app use
-    3.  Compute usage time and app open frequency per app category
-5.   Merge all processed PUD sub-datasets into one new one
-6.  Join the ESM dataset witht he processed PUD
+The pipeline performs the following steps:
+
+1.  Read the ESM dataset (ESD) which is to be enriched with the phone use data.
+2.  Read the app category dataset (ACD), which identifies an app category per specific phone app.
+3.  Read the phone use datasets (PUD) (one file per participant) and merge them into one single dataset.
+4.  Add the `better_category` information from the ACD to the app uses recorded to the PUD.
+5.  For each beep in the ESD:
+    1.  Filter the PUD for all app usage events for that participant **within the allowed time window** (1 hour before the beep).
+    2.  Apply the app category of each app use to group usage.
+    3.  Compute usage time and the frequency of opening apps (per category).
+6.  Merge all processed PUD sub-datasets into one new one.
+7.  Join the ESM dataset with the processed PUD dataset to get the final, enriched dataset.
 
 ```{r}
+# Load libraries
 library(dplyr)
 library(readr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(purrr)
+library(dtplyr)
 ```
 
+### 0. Define the test dataset sample
+
 ```{r}
-five_daily <- read_csv("data/cleaned_phone_use_noLOC/data/five_daily.csv")
+max_user_id <- 15000 # restrict to UserIDs <= this number
+#max_user_id <- Inf # Full sample
 ```
+
+### 1. Read the ESM dataset
+
+Below, we read the master dataset `five_daily.csv`, which contains the ESM (Experience Sampling) data. Each row represents one “beep” and the participants’ responses to the ESM questions (e.g. S1, S2, …, H1). We will create a timestamp column combining the date and the scheduled time.
+
+```{r}
+# Path to the ESM data
+esm_file <- "data/cleaned_phone_use_noLOC/data/five_daily.csv"
+
+# Read the ESM data
+ESD <- read_csv(esm_file) |>
+  lazy_dt() |> 
+  # filter to get to test sample dataset
+  filter(UserID <= max_user_id) |> 
+  # standardize columns names just a bit here
+  rename(
+    survey_number = `Survey Number`,
+    scheduled_time = `Scheduled Time`
+  ) |> 
+  # scheduled_times are listed as e.g. "01:00:00 CET".
+  # We remove " CET" (if it exists) before parsing the datetimes
+  mutate(
+    scheduled_time = str_remove(scheduled_time, " CET$")
+  ) |> 
+  mutate(
+    beep_time = as.POSIXct(
+      paste(Date, scheduled_time),
+      format = "%Y-%m-%d %H:%M:%S",
+      tz = "UTC"
+      ),
+    .after = survey_number,
+    # get rid of the Date and scheduled_time columns
+    .keep = "unused" 
+  )
+
+# Preview
+ESD |> as_tibble()
+```
+
+> **Note**\
+> - We don't mess around with time zones here by using UTC everywhere. This effectively assumes that all times are in the same time zone, but in this case, we don't need to worry about which one. This might lead to weird effects with beeps right around the switch from winter to summer time, so it might be a good idea to go for Dutch time after all, but we can do that later!
+>
+> \- We’re storing the combined datetime of the beeps in `beep_time`.
+
+### 2. Read the category dataset
+
+The dataset `app_categories.csv` maps each application ID (`app_id`) to a category (e.g., “Instant_Messaging”, “Social_Networking”, etc.). Here, we only care about `better_category`, so we can remove all other columns.
+
+```{r}
+# Path to the app category file
+category_file <- "data/cleaned_phone_use_noLOC/app_categories.csv"
+
+app_categories <- read_csv(category_file) |> 
+  select(app_id, name, better_category) |> 
+  lazy_dt()
+
+# Preview
+app_categories |> as_tibble()
+```
+
+### 3. Read and merge the phone use datasets
+
+Each participant’s phone usage is stored in a separate CSV file in the `data/cleaned_phone_use_noLOC/data/app_events` folder, named according to the participant’s User ID (e.g. `10000_appevents.csv`).
+
+Below, we list all CSV files that match the pattern `_appevents.csv`, read them in a loop, and row-bind them into a single phone usage dataset. We also parse the `startTime` and `endTime` as proper date-times.
+
+```{r}
+# Path to folder containing individual phone usage files
+pud_folder <- "data/cleaned_phone_use_noLOC/data/app_events"
+
+# List all usage files
+usage_files <- list.files(
+  path = pud_folder,
+  pattern = "_appevents\\.csv$",
+  full.names = TRUE
+)
+
+# Read all files into one dataframe
+all_usage <- usage_files |>
+  # read into list of data frames
+  map(
+    ~ read_csv(.x, show_col_types = FALSE),
+    .progress = "Reading participant's app usage data: "
+  ) |> 
+  # row bind the list
+  list_rbind() |> 
+  # filter to get to test sample dataset
+  filter(UserID <= max_user_id)
+  
+all_usage <- all_usage |>
+  lazy_dt() |> 
+  # Convert startTime and endTime to POSIXct
+  # & standardize column names while we're at it!
+  mutate(
+    start_time = ymd_hms(startTime),
+    end_time = ymd_hms(endTime),
+    .keep = "unused"
+  ) |>
+  # Compute usage duration in seconds
+  mutate(
+    usage_duration_sec = as.numeric(difftime(
+      end_time, 
+      start_time,
+      tz = "UTC", # we 
+      units = "secs"
+      ))
+  ) |>
+  # sort by user ID and start_time
+  arrange(UserID, start_time)
+
+# Preview
+all_usage |> as_tibble()
+```
+
+### 4. Filter and summarize phone usage (per beep)
+
+Our goal is to create a phone usage summary for each beep in the `ESD`, capturing total usage duration (in seconds) and the number of app-open events, grouped by category.
+
+The steps:
+
+1.  For each **(UserID, beep)** pair, gather the phone usage within the time interval \[beep_time − 1 hour, beep_time\].
+2.  Use `app_categories` to link each `application` to its category (we will use the `better_category` column).
+3.  Aggregate usage by app category to get total usage time and open frequency in that interval.
+
+We’ll do this by:
+
+1.  Joining `ESD` (which has one row per beep) with `all_usage` (which has many rows of phone usage events) **by user**.
+2.  Filtering usage rows to only those between `beep_time − 1 hour` and `beep_time`.
+3.  Joining with `app_categories` to identify the category for each app.
+4.  Group by userID, survey_number, beep_time, and app category
+5.  Summarizing usage time and event frequency by app category.
+
+```{r}
+# Define the time window
+time_window <- hours(1)
+
+usage_summary <- ESD |>
+  # 1) Join ESM beep data with usage data (by user)
+  left_join(all_usage, by = "UserID") |>
+  # 2) Keep only usage intervals that occur within 1 hour before beep_time
+  filter(
+    !is.na(beep_time),
+    !is.na(start_time),
+    start_time >= beep_time - time_window,
+    end_time <= beep_time
+  ) |>
+  # 3) Join with categories to map 'application' to 'better_category'
+  left_join(
+    app_categories,
+    by = c("application" = "app_id")
+  ) |>
+  # 4) Group by userID, survey_number, beep_time, and app category
+  group_by(
+    UserID,
+    survey_number, 
+    beep_time, 
+    better_category
+    ) |>
+  # 5) Summarize total usage and # of openings
+  summarize(
+    total_usage_sec = sum(usage_duration_sec, na.rm = TRUE),
+    number_of_opens = n(), # this assumes that each usage row is one time the app has been opened
+    .groups = "drop"
+  ) |> 
+  as_tibble()
+
+# Preview
+usage_summary
+```
+
+> **Note**\
+> 1. We used a simple filter logic:\
+> - `start_time >= beep_time - 1 hour`\
+> - `end_time <= beep_time`\
+> This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `beep_time - 1 hour` but ends within the window) at this point.\
+> 2. The `number_of_opens` is a naive event count in the sense that it assumes each row in the usage dataset corresponds to one opening of the app.
+
+### 5. Reshape and merge all processed PUD sub-datasets into one
+
+After the summarization step, we have a dataset (`usage_summary`) with one row per **UserID, beep_time and category.** Next up, we want to merge these back to have one row per beep, with wide columns for each category’s usage time or open frequency. For this we pivot wide:
+
+```{r}
+# Pivot usage_summary to have separate columns for each category
+usage_wide <- usage_summary |>
+  pivot_wider(
+    id_cols = c(UserID, survey_number, beep_time),
+    names_from = better_category,
+    values_from = c(total_usage_sec, number_of_opens),
+    values_fill = 0 # fill missing with 0
+  )
+
+# Preview
+usage_wide
+```
+
+This could give columns like:\
+- `total_usage_sec_Instant_Messaging`\
+- `number_of_opens_Instant_Messaging`\
+- `total_usage_sec_Social_Networking`\
+- `number_of_opens_Social_Networking`\
+… etc.
+
+### 6. Join the ESM dataset with the processed PUD
+
+Finally, we join the wide usage data (one row per beep) to the original ESM data:
+
+```{r}
+ESD_enriched <- ESD |>
+  left_join(
+    usage_wide,
+    by = c("UserID", "survey_number", "beep_time")
+  ) |> 
+  as_tibble()
+
+# Preview of final dataset
+ESD_enriched
+```
+
+`ESD_enriched` is contains the original ESM dataset that is now enriched with the phone usage metrics (by app category) in the hour preceding each beep.
+
+> This dataset contains `total_usage_sec_NA`, which is usage of apps that had no app category specified for them.
