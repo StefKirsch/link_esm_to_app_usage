@@ -7,8 +7,6 @@ editor: visual
 ## Link ESM to Phone Use Data
 
 > This does not work as we do the operations on the largest possible dataset all at once. What we should do instead, is doing all the operations per participant, so we can go through the app usage beep by beep safely. We can even store the temp intermediate data somewhere to remove it at a later stage. Let's see what works best on my hardware.
->
-> Maybe what I should try before is using lazy dts first :D
 
 This data processing pipeline links ESM data to the phone use data. The goal is a dataset that contains the ESM data per beep and then, for each beep, also the phone use (per smartphone app category) within the hour before the respective beep of the participants.
 
@@ -262,4 +260,5 @@ ESD_enriched
 
 `ESD_enriched` is contains the original ESM dataset that is now enriched with the phone usage metrics (by app category) in the hour preceding each beep.
 
-> This dataset contains `total_usage_sec_NA`, which is usage of apps that had no app category specified for them.
+> **Note**\
+> This dataset contains `total_usage_sec_NA`, which is usage of apps that had no app category specified for them. Use it or ignore it at your own discretion.
