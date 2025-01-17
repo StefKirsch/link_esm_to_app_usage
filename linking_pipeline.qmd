@@ -208,7 +208,10 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
     left_join(
       app_categories,
       by = c("application" = "app_id"),
-      # this is a more reasonable relationship that won't cause a warning anyway, but there is no harm in telling dplyr what we expect. Also, this way, it will tell us if something unexpeted is happening!
+      # this is a more reasonable relationship that 
+      # won't cause a warning anyway, but there is no harm 
+      # in telling dplyr what we expect. Also, this way, it will 
+      # tell us if something unexpeted is happening!
       relationship = "many-to-one"
     ) |>
     # 4) Do the grouping
@@ -225,7 +228,9 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
     # 5) Summarize total usage and # of openings
     summarize(
       total_usage_sec = sum(usage_duration_sec, na.rm = TRUE),
-      number_of_opens = n(), # this assumes that each usage row is one time the app has been opened
+      # this assumes that each usage row is one time the 
+      # app has been opened
+      number_of_opens = n(), 
       .groups = "drop"
     )
 }
@@ -335,12 +340,14 @@ usage_time_cols <- str_subset(names(ESD_enriched), "total_usage_sec_")
 opens_cols <- str_subset(names(ESD_enriched), "number_of_opens_")
 
 # `rbind()` was quite a nifty suggestion from chatGPT here
-# We create named rows fromt he names of the two vector names we bind
-# which gives us two rows here of n columns where n is the number of
-# app categories
+# It creates a data frame with named rows according to the names of the 
+# two vector names we're binding together, which gives us two rows of 
+# n columns where n is the number of app categories.
 # We then convert that dataframe back into a vector, which by default 
-# collects elements by going line by line and then column by column.
-# Not super intuitive, but it does exactly what we need here.
+# collects elements by going line by line, column by column.
+# Not super intuitive, but this gives us the interleaved app usage 
+# column names in the original order of categories, which is 
+# exactly what we want here.
 interleaved_usage_cols <- c(rbind(usage_time_cols,opens_cols))
 
 # get the columns from the ESM dataset
@@ -377,3 +384,4 @@ ESD_enriched_in_order |>
     paste0("data/output/", filename, "_with_app_usage.csv")
     )
 ```
+
