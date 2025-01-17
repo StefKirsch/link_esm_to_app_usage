@@ -3,7 +3,8 @@
 .RData
 .Ruserdata
 
-data
+*.csv
+data/cleaned_phone_use_noLOC
 data_skeleton
 folder_structure.txt
 

@@ -15,13 +15,13 @@ The pipeline performs the following steps:
 1.  Read the ESM dataset (ESD) which is to be enriched with the phone use data.
 2.  Read the app category dataset (ACD), which identifies an app category per specific phone app.
 3.  Read the phone use datasets (PUD) (one file per participant) and merge them into one single dataset.
-4.  Add the `better_category` information from the ACD to the app uses recorded to the PUD.
-5.  For each beep in the ESD:
+4.  For each beep in the ESD:
     1.  Filter the PUD for all app usage events for that participant **within the allowed time window** (1 hour before the beep).
     2.  Apply the app category of each app use to group usage.
     3.  Compute usage time and the frequency of opening apps (per category).
-6.  Merge all processed PUD sub-datasets into one new one.
-7.  Join the ESM dataset with the processed PUD dataset to get the final, enriched dataset.
+5.  Merge all processed PUD sub-datasets into one new one.
+6.  Join the ESM dataset with the processed PUD dataset to get the final, enriched dataset.
+7.  Export the ESM dataset to csv.
 
 ```{r}
 # Load libraries
@@ -31,14 +31,14 @@ library(tidyr)
 library(stringr)
 library(lubridate)
 library(purrr)
-library(dtplyr)
 ```
 
 ### 0. Define the test dataset sample
 
 ```{r}
-max_user_id <- 15000 # restrict to UserIDs <= this number
-#max_user_id <- Inf # Full sample
+# Use Inf for the full dataset. 
+# 15000 is a good value to test the workflow for a couple of participants.
+max_user_id <- Inf # Full sample
 ```
 
 ### 1. Read the ESM dataset
@@ -51,7 +51,6 @@ esm_file <- "data/cleaned_phone_use_noLOC/data/five_daily.csv"
 
 # Read the ESM data
 ESD <- read_csv(esm_file) |>
-  lazy_dt() |> 
   # filter to get to test sample dataset
   filter(UserID <= max_user_id) |> 
   # standardize columns names just a bit here
@@ -76,11 +75,10 @@ ESD <- read_csv(esm_file) |>
   )
 
 # Preview
-ESD |> as_tibble()
+ESD
 ```
 
-> **Note**\
-> - We don't mess around with time zones here by using UTC everywhere. This effectively assumes that all times are in the same time zone, but in this case, we don't need to worry about which one. This might lead to weird effects with beeps right around the switch from winter to summer time, so it might be a good idea to go for Dutch time after all, but we can do that later!
+> **Note** - We don't mess around with time zones here by using UTC everywhere. This effectively assumes that all times are in the same time zone, but in this case, we don't need to worry about which one. This might lead to weird effects with beeps right around the switch from winter to summer time, so it might be a good idea to go for Dutch time after all, but we can do that later!
 >
 > \- We’re storing the combined datetime of the beeps in `beep_time`.
 
@@ -93,11 +91,10 @@ The dataset `app_categories.csv` maps each application ID (`app_id`) to a catego
 category_file <- "data/cleaned_phone_use_noLOC/app_categories.csv"
 
 app_categories <- read_csv(category_file) |> 
-  select(app_id, name, better_category) |> 
-  lazy_dt()
+  select(app_id, name, better_category)
 
 # Preview
-app_categories |> as_tibble()
+app_categories
 ```
 
 ### 3. Read and merge the phone use datasets
@@ -127,15 +124,20 @@ all_usage <- usage_files |>
   # row bind the list
   list_rbind() |> 
   # filter to get to test sample dataset
-  filter(UserID <= max_user_id)
-  
-all_usage <- all_usage |>
-  lazy_dt() |> 
+  filter(UserID <= max_user_id) |> 
+  # keep only the columns we need
+  select(
+    UserID,
+    application,
+    startTime,
+    endTime
+  ) |> 
   # Convert startTime and endTime to POSIXct
   # & standardize column names while we're at it!
   mutate(
     start_time = ymd_hms(startTime),
     end_time = ymd_hms(endTime),
+    .after = application,
     .keep = "unused"
   ) |>
   # Compute usage duration in seconds
@@ -143,15 +145,18 @@ all_usage <- all_usage |>
     usage_duration_sec = as.numeric(difftime(
       end_time, 
       start_time,
-      tz = "UTC", # we 
+      tz = "UTC",
       units = "secs"
-      ))
+      )),
+    .after = end_time
   ) |>
+  # we seem to have a couple of complete duplicates, which we can simply remove here
+  distinct() |> 
   # sort by user ID and start_time
   arrange(UserID, start_time)
 
 # Preview
-all_usage |> as_tibble()
+all_usage
 ```
 
 ### 4. Filter and summarize phone usage (per beep)
@@ -160,66 +165,131 @@ Our goal is to create a phone usage summary for each beep in the `ESD`, capturin
 
 The steps:
 
-1.  For each **(UserID, beep)** pair, gather the phone usage within the time interval \[beep_time − 1 hour, beep_time\].
-2.  Use `app_categories` to link each `application` to its category (we will use the `better_category` column).
+1.  For each **(UserID, beep)** pair, gather the phone usage within the time interval \[`beep_time` − 1 hour, `beep_time`\].
+2.  Use `app_categories` to link each `application` to its category (we use the `better_category` column).
 3.  Aggregate usage by app category to get total usage time and open frequency in that interval.
 
 We’ll do this by:
 
-1.  Joining `ESD` (which has one row per beep) with `all_usage` (which has many rows of phone usage events) **by user**.
+1.  Joining `ESD` (which has one row per **beep**) with `all_usage` (which has many rows of phone usage events) **by user**. This results in a many-to-many relationship for the merge, which we need to specify as the `relationship` in `left_join()` to suppress the associated warning.
+
+::: callout-note
+## Note
+
+This is arguably not very efficient, as we are not only joining a app usage rows that are outside of any beep time window, but we also join together app usage data with **every beep** of the current user. From a data perspective, that's not a big deal, since we will `filter()` out all app usages that are not within the correct time window in the next step 2. For this dataset, the runtime for this joining operation should still be \< 10 min on average hardware, which is really humane all things considered. The benefit of this lazy approach is that the code is much simpler and clearer, which is a win-win for us (the programmers) and people who would want to reproduce this in the future. You are welcome!(?). A drawback is that this step becomes quite memory-intensive, which we will need to address, see below.
+:::
+
 2.  Filtering usage rows to only those between `beep_time − 1 hour` and `beep_time`.
 3.  Joining with `app_categories` to identify the category for each app.
-4.  Group by userID, survey_number, beep_time, and app category
+4.  Group by `userID`, `survey_number`, `beep_time`, and `better_category`
 5.  Summarizing usage time and event frequency by app category.
 
+Partially because our lazy coding in step 1., we need to do operations 1. to 5. on subsets of the data, as otherwise we need A LOT of RAM. For this, we iterate (`map()`) over chunks of the dataset by `UserID` (so much for simple code...). At least we can put steps 1. to 5. into a nice function that we can then call on the individual data set chunks.
+
 ```{r}
-# Define the time window
+enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
+  
+  ESD |> 
+    # 1) The notorious inefficient join we talked about before. At least we can silence the many-to-many warning by warning dplyr what we will ask it to do here!
+    left_join(
+    all_usage, 
+    by = "UserID",
+    # Politely warn dplyr that this is what we actually want, so it's not trying to talk us out of it...
+    relationship = "many-to-many"
+    ) |>
+    # 2) Keep only app usage events that occur within the `time_window` before `beep_time`
+    filter(
+      !is.na(beep_time),
+      !is.na(start_time),
+      start_time >= beep_time - time_window,
+      end_time <= beep_time
+    ) |>
+    # 3) Join with categories which allows us to to map 'application' to 'better_category'
+    left_join(
+      app_categories,
+      by = c("application" = "app_id"),
+      # this is a more reasonable relationship that won't cause a warning anyway, but there is no harm in telling dplyr what we expect. Also, this way, it will tell us if something unexpeted is happening!
+      relationship = "many-to-one"
+    ) |>
+    # 4) Do the grouping
+    group_by(
+      UserID,
+      # this is the beep ID per day
+      survey_number, 
+      # we need to group by beep time to distinguish beeps 
+      # with the same `survey_number` but occur on different 
+      # days
+      beep_time, 
+      better_category
+      ) |>
+    # 5) Summarize total usage and # of openings
+    summarize(
+      total_usage_sec = sum(usage_duration_sec, na.rm = TRUE),
+      number_of_opens = n(), # this assumes that each usage row is one time the app has been opened
+      .groups = "drop"
+    )
+}
+```
+
+::: callout-note
+## Note
+
+1.  We used a simple filter logic:\
+    -   `start_time >= beep_time - 1 hour`\
+    -   `end_time <= beep_time`\
+        This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `beep_time - 1 hour` but ends within the window) at this point.
+2.  The `number_of_opens` is a naive event count in the sense that it assumes each row in the usage dataset corresponds to one opening of the app.
+:::
+
+Let's test the function on the first `UserID`.
+
+```{r}
+first_user <- first(ESD$UserID)
+
+ESD |> 
+  filter(UserID == first_user) |> 
+  enrich_esd_with_psd_per_user(
+    PSD = all_usage,
+    app_categories = app_categories,
+    time_window = hours(1)
+  )
+```
+
+Now it's time to stop messing around! We will release our function-Kraken on the full ESD and PSD datasets (oh god help us all!). As explained before, we want to do this on chunks of the dataset. We will follow the same logic as above and create our chunks by `UserID`. Then we can `map()` the function above on the chunks, and then row-bind the resulting list on a dataframe, and ta-da, we get a dataset containing one row for each beep and app usage per category before that beep.
+
+```{r}
+# Define the time window. If we change our mind about this we can quickly change it here with near natural language!
 time_window <- hours(1)
 
 usage_summary <- ESD |>
-  # 1) Join ESM beep data with usage data (by user)
-  left_join(all_usage, by = "UserID") |>
-  # 2) Keep only usage intervals that occur within 1 hour before beep_time
-  filter(
-    !is.na(beep_time),
-    !is.na(start_time),
-    start_time >= beep_time - time_window,
-    end_time <= beep_time
-  ) |>
-  # 3) Join with categories to map 'application' to 'better_category'
-  left_join(
-    app_categories,
-    by = c("application" = "app_id")
-  ) |>
-  # 4) Group by userID, survey_number, beep_time, and app category
-  group_by(
-    UserID,
-    survey_number, 
-    beep_time, 
-    better_category
-    ) |>
-  # 5) Summarize total usage and # of openings
-  summarize(
-    total_usage_sec = sum(usage_duration_sec, na.rm = TRUE),
-    number_of_opens = n(), # this assumes that each usage row is one time the app has been opened
-    .groups = "drop"
-  ) |> 
-  as_tibble()
+  # Create the dataset chunks
+  group_by(UserID) |> 
+  group_split() |> 
+  # Map the function on a chunk
+  map(
+    # The `map()` documentation recommends this anonymous function syntax if we pass in some constant arguments.
+    \(df) enrich_esd_with_psd_per_user(
+      ESD = df, 
+      PSD = all_usage, 
+      app_categories = app_categories, 
+      time_window = time_window
+      ),
+    .progress = "Enriching the ESM data with phone use: "
+    ) |> 
+  # row bind list to a dataframe
+  list_rbind() |> 
+  # sort, so the result is easier to read
+  arrange(UserID, beep_time)
 
 # Preview
 usage_summary
 ```
 
-> **Note**\
-> 1. We used a simple filter logic:\
-> - `start_time >= beep_time - 1 hour`\
-> - `end_time <= beep_time`\
-> This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `beep_time - 1 hour` but ends within the window) at this point.\
-> 2. The `number_of_opens` is a naive event count in the sense that it assumes each row in the usage dataset corresponds to one opening of the app.
+Now we have all the data we wanted, but not quite yet in the format we want. The last two steps can fix that for us!
 
 ### 5. Reshape and merge all processed PUD sub-datasets into one
 
-After the summarization step, we have a dataset (`usage_summary`) with one row per **UserID, beep_time and category.** Next up, we want to merge these back to have one row per beep, with wide columns for each category’s usage time or open frequency. For this we pivot wide:
+The summarization step gave us a dataset (`usage_summary`) with one row per **UserID, beep_time and category.** Next up, we want to merge these back into the original ESD so we get one row per beep, one columns for each app category’s usage time and open frequency. To get there we must first pivot wide:
 
 ```{r}
 # Pivot usage_summary to have separate columns for each category
@@ -251,14 +321,59 @@ ESD_enriched <- ESD |>
   left_join(
     usage_wide,
     by = c("UserID", "survey_number", "beep_time")
-  ) |> 
-  as_tibble()
+  )
 
 # Preview of final dataset
 ESD_enriched
 ```
 
+Right, we first get all the `total_usage_in_seconds`-columns and then all the `number_of_opens`-columns, which is not ideal. Instead, it would be better to have the columns for both usage metrics per app category next to each other. We can do that by interleaving the usage time `total_usage_in_seconds` columns with the `number_of_opens` columns.
+
+```{r}
+usage_time_cols <- str_subset(names(ESD_enriched), "total_usage_sec_")
+
+opens_cols <- str_subset(names(ESD_enriched), "number_of_opens_")
+
+# `rbind()` was quite a nifty suggestion from chatGPT here
+# We create named rows fromt he names of the two vector names we bind
+# which gives us two rows here of n columns where n is the number of
+# app categories
+# We then convert that dataframe back into a vector, which by default 
+# collects elements by going line by line and then column by column.
+# Not super intuitive, but it does exactly what we need here.
+interleaved_usage_cols <- c(rbind(usage_time_cols,opens_cols))
+
+# get the columns from the ESM dataset
+esm_cols <- setdiff(names(ESD_enriched), c(interleaved_usage_cols))
+
+# combine the esm_cols with the usage columns
+all_cols_in_order <- c(esm_cols, interleaved_usage_cols)
+
+# relocate according to the new column order.
+ESD_enriched_in_order <- ESD_enriched |> 
+  relocate(all_of(all_cols_in_order))
+
+ESD_enriched_in_order
+```
+
 `ESD_enriched` is contains the original ESM dataset that is now enriched with the phone usage metrics (by app category) in the hour preceding each beep.
 
-> **Note**\
-> This dataset contains `total_usage_sec_NA`, which is usage of apps that had no app category specified for them. Use it or ignore it at your own discretion.
+::: callout-note
+## Note
+
+This dataset contains `total_usage_sec_NA`, which is usage of apps that had no app category specified for them. Use it or ignore it at your own discretion.
+:::
+
+### 7. Export the dataset
+
+Lastly, we export the enriched dataset.
+
+```{r}
+# make sure we keep 
+filename <- tools::file_path_sans_ext(basename(esm_file))
+
+ESD_enriched_in_order |> 
+  write_csv(
+    paste0("data/output/", filename, "_with_app_usage.csv")
+    )
+```
