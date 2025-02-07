@@ -78,7 +78,8 @@ ESD <- read_csv(esm_file) |>
 ESD
 ```
 
-> **Note** - We don't mess around with time zones here by using UTC everywhere. This effectively assumes that all times are in the same time zone, but in this case, we don't need to worry about which one. This might lead to weird effects with beeps right around the switch from winter to summer time, so it might be a good idea to go for Dutch time after all, but we can do that later!
+> **Note** \
+> - We don't mess around with time zones here by using UTC everywhere. This effectively assumes that all times are in the same time zone, but in this case, we don't need to worry about which one. This might lead to weird effects with beeps right around the switch from winter to summer time, so it might be a good idea to go for Dutch time after all, but we can do that later!
 >
 > \- We’re storing the combined datetime of the beeps in `beep_time`.
 
@@ -376,7 +377,7 @@ This dataset contains `total_usage_sec_NA`, which is usage of apps that had no a
 Lastly, we export the enriched dataset.
 
 ```{r}
-# make sure we keep 
+# make sure we keep the file name
 filename <- tools::file_path_sans_ext(basename(esm_file))
 
 ESD_enriched_in_order |> 
@@ -384,4 +385,3 @@ ESD_enriched_in_order |>
     paste0("data/output/", filename, "_with_app_usage.csv")
     )
 ```
-
