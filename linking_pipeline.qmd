@@ -43,20 +43,44 @@ max_user_id <- Inf # Full sample
 
 ### 1. Read the ESM dataset
 
-Below, we read the master dataset `five_daily.csv`, which contains the ESM (Experience Sampling) data. Each row represents one “beep” and the participants’ responses to the ESM questions (e.g. S1, S2, …, H1). We will create a timestamp column combining the date and the scheduled time.
+Below, we read the master datasets `once_daily.csv` and `five_daily.csv` which contain the ESM (Experience Sampling) data. Each row represents one “beep” and the participants’ responses to the ESM questions (e.g. S1, S2, …, H1). The sleep data in `once_daily.csv` is asked at the beginning of the day, which we will interpret as beep 1.\
+We will create a timestamp column `beep_time` combining the date and the scheduled time.
 
 ```{r}
 # Path to the ESM data
-esm_file <- "data/cleaned_phone_use_noLOC/data/five_daily.csv"
+esm_sleep_file <- "data/cleaned_phone_use_noLOC/data/once_daily.csv"
+esm_beeps_file <- "data/cleaned_phone_use_noLOC/data/five_daily.csv"
 
-# Read the ESM data
-ESD <- read_csv(esm_file) |>
+# Read the ESM sleep data, which we consider as beep 1
+ESD_sleep <- read_csv(esm_sleep_file) |>
   # filter to get to test sample dataset
   filter(UserID <= max_user_id) |> 
+  mutate(
+    `Survey Number` = 1 
+  )
+
+ESD_beeps <- read_csv(esm_beeps_file) |>
+  # filter to get to test sample dataset
+  filter(UserID <= max_user_id) |> 
+  # offset beeps by one to get numbers from 2 to 5
+  mutate(
+    `Survey Number` = `Survey Number` + 1
+  )
+
+ESD_all <- full_join(
+  # full join to maintain the data from both datasets
+  ESD_beeps, 
+  ESD_sleep,
+  by = c("UserID", "Date", "Survey Number")
+  ) |> 
   # standardize columns names just a bit here
   rename(
     survey_number = `Survey Number`,
     scheduled_time = `Scheduled Time`
+  ) |> 
+  # make sure the 
+  arrange(
+    UserID, Date, survey_number
   ) |> 
   # scheduled_times are listed as e.g. "01:00:00 CET".
   # We remove " CET" (if it exists) before parsing the datetimes
@@ -75,10 +99,10 @@ ESD <- read_csv(esm_file) |>
   )
 
 # Preview
-ESD
+ESD_all
 ```
 
-> **Note** \
+> **Note**\
 > - We don't mess around with time zones here by using UTC everywhere. This effectively assumes that all times are in the same time zone, but in this case, we don't need to worry about which one. This might lead to weird effects with beeps right around the switch from winter to summer time, so it might be a good idea to go for Dutch time after all, but we can do that later!
 >
 > \- We’re storing the combined datetime of the beeps in `beep_time`.
@@ -250,9 +274,9 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
 Let's test the function on the first `UserID`.
 
 ```{r}
-first_user <- first(ESD$UserID)
+first_user <- first(ESD_all$UserID)
 
-ESD |> 
+ESD_all |> 
   filter(UserID == first_user) |> 
   enrich_esd_with_psd_per_user(
     PSD = all_usage,
@@ -267,7 +291,7 @@ Now it's time to stop messing around! We will release our function-Kraken on the
 # Define the time window. If we change our mind about this we can quickly change it here with near natural language!
 time_window <- hours(1)
 
-usage_summary <- ESD |>
+usage_summary <- ESD_all |>
   # Create the dataset chunks
   group_by(UserID) |> 
   group_split() |> 
@@ -323,7 +347,7 @@ This could give columns like:\
 Finally, we join the wide usage data (one row per beep) to the original ESM data:
 
 ```{r}
-ESD_enriched <- ESD |>
+ESD_enriched <- ESD_all |>
   left_join(
     usage_wide,
     by = c("UserID", "survey_number", "beep_time")
@@ -378,7 +402,7 @@ Lastly, we export the enriched dataset.
 
 ```{r}
 # make sure we keep the file name
-filename <- tools::file_path_sans_ext(basename(esm_file))
+filename <- tools::file_path_sans_ext(basename(esm_beeps_file))
 
 ESD_enriched_in_order |> 
   write_csv(
