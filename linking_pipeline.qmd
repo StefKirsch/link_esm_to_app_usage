@@ -43,8 +43,7 @@ max_user_id <- Inf # Full sample
 
 ### 1. Read the ESM dataset
 
-Below, we read the master datasets `once_daily.csv` and `five_daily.csv` which contain the ESM (Experience Sampling) data. Each row represents one “beep” and the participants’ responses to the ESM questions (e.g. S1, S2, …, H1). The sleep data in `once_daily.csv` is asked at the beginning of the day, which we will interpret as beep 1.\
-We will create a timestamp column `beep_time` combining the date and the scheduled time.
+Below, we read the master datasets `once_daily.csv` and `five_daily.csv` which contain the ESM (Experience Sampling) data. Each row represents one “beep” and the participants’ responses to the ESM questions (e.g. S1, S2, …, H1). The sleep data in `once_daily.csv` is asked at the beginning of the day, which we will interpret as beep 1.
 
 ```{r}
 # Path to the ESM data
@@ -76,26 +75,21 @@ ESD_all <- full_join(
   # standardize columns names just a bit here
   rename(
     survey_number = `Survey Number`,
-    scheduled_time = `Scheduled Time`
+    scheduled_time = `Scheduled Time`,
+    date = Date
   ) |> 
   # make sure the 
   arrange(
-    UserID, Date, survey_number
+    UserID, date, survey_number
   ) |> 
   # scheduled_times are listed as e.g. "01:00:00 CET".
   # We remove " CET" (if it exists) before parsing the datetimes
   mutate(
-    scheduled_time = str_remove(scheduled_time, " CET$")
-  ) |> 
-  mutate(
-    beep_time = as.POSIXct(
-      paste(Date, scheduled_time),
-      format = "%Y-%m-%d %H:%M:%S",
-      tz = "UTC"
-      ),
-    .after = survey_number,
-    # get rid of the Date and scheduled_time columns
-    .keep = "unused" 
+    scheduled_time = str_remove(scheduled_time, " CET$"),
+    scheduled_time = as.POSIXct(
+      scheduled_time,
+      format = "%H:%M:%S"
+    )
   )
 
 # Preview
@@ -105,7 +99,7 @@ ESD_all
 > **Note**\
 > - We don't mess around with time zones here by using UTC everywhere. This effectively assumes that all times are in the same time zone, but in this case, we don't need to worry about which one. This might lead to weird effects with beeps right around the switch from winter to summer time, so it might be a good idea to go for Dutch time after all, but we can do that later!
 >
-> \- We’re storing the combined datetime of the beeps in `beep_time`.
+> \- We’re storing the combined datetime of the beeps in `scheduled_time`.
 
 ### 2. Read the category dataset
 
@@ -190,7 +184,7 @@ Our goal is to create a phone usage summary for each beep in the `ESD`, capturin
 
 The steps:
 
-1.  For each **(UserID, beep)** pair, gather the phone usage within the time interval \[`beep_time` − 1 hour, `beep_time`\].
+1.  For each **(UserID, beep)** pair, gather the phone usage within the time interval \[`scheduled_time` − 1 hour, `scheduled_time`\].
 2.  Use `app_categories` to link each `application` to its category (we use the `better_category` column).
 3.  Aggregate usage by app category to get total usage time and open frequency in that interval.
 
@@ -204,9 +198,9 @@ We’ll do this by:
 This is arguably not very efficient, as we are not only joining app usage rows that are outside of any beep time window, but we're also joining together app usage data for **every beep** of the current user. From a data perspective, that's not a big deal, since we will `filter()` out all app usages that are not within the correct time window in the next step 2. For this dataset, this "lazy" runtime for this joining operation should still be \< 10 min on average hardware, which is really humane, all things considered. The benefit of this "lazy" approach is that the code is much simpler and clearer, which is a win-win for us (the programmers) and people who would want to reproduce this in the future. You are welcome!(?). A drawback is that this step becomes quite memory-intensive, which we will need to address, see below.
 :::
 
-2.  Filtering usage rows to only those between `beep_time − 1 hour` and `beep_time`.
+2.  Filtering usage rows to only those between `scheduled_time − 1 hour` and `scheduled_time`.
 3.  Joining with `app_categories` to identify the category for each app.
-4.  Group by `userID`, `survey_number`, `beep_time`, and `better_category`
+4.  Group by `userID`, `survey_number`, `scheduled_time`, and `better_category`
 5.  Summarizing usage time and event frequency by app category.
 
 Partially because our lazy coding in step 1., we need to do operations 1. to 5. on subsets of the data, as otherwise we need A LOT of RAM. For this, we iterate (`map()`) over chunks of the dataset by `UserID` (so much for simple code...). At least we can put steps 1. to 5. into a nice function that we can then call on the individual data set chunks.
@@ -222,12 +216,12 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
     # Politely warn dplyr that this is what we actually want, so it's not trying to talk us out of it...
     relationship = "many-to-many"
     ) |>
-    # 2) Keep only app usage events that occur within the `time_window` before `beep_time`
+    # 2) Keep only app usage events that occur within the `time_window` before `scheduled_time`
     filter(
-      !is.na(beep_time),
+      !is.na(scheduled_time),
       !is.na(start_time),
-      start_time >= beep_time - time_window,
-      end_time <= beep_time
+      start_time >= scheduled_time - time_window,
+      end_time <= scheduled_time
     ) |>
     # 3) Join with categories which allows us to to map 'application' to 'better_category'
     left_join(
@@ -247,7 +241,7 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
       # we need to group by beep time to distinguish beeps 
       # with the same `survey_number` but occur on different 
       # days
-      beep_time, 
+      scheduled_time, 
       better_category
       ) |>
     # 5) Summarize total usage and # of openings
@@ -264,10 +258,10 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
 ::: callout-note
 ## Note
 
-1.  We used a simple filter logic:\
-    -   `start_time >= beep_time - 1 hour`\
-    -   `end_time <= beep_time`\
-        This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `beep_time - 1 hour` but ends within the window) at this point.
+1.  We used a simple filter logic:
+    -   `start_time >= scheduled_time- 1 hour`
+    -   `end_time <=``scheduled_time`\
+        This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `scheduled_time- 1 hour` but ends within the window) at this point.
 2.  The `number_of_opens` is a naive event count in the sense that it assumes each row in the usage dataset corresponds to one opening of the app.
 :::
 
@@ -309,7 +303,7 @@ usage_summary <- ESD_all |>
   # row bind list to a dataframe
   list_rbind() |> 
   # sort, so the result is easier to read
-  arrange(UserID, beep_time)
+  arrange(UserID, scheduled_time)
 
 # Preview
 usage_summary
@@ -319,13 +313,13 @@ Now we have all the data we wanted, but not quite yet in the format we want. The
 
 ### 5. Reshape and merge all processed PUD sub-datasets into one
 
-The summarization step gave us a dataset (`usage_summary`) with one row per **UserID, beep_time and category.** Next up, we want to merge these back into the original ESD so we get one row per beep, one columns for each app category’s usage time and open frequency. To get there we must first pivot wide:
+The summarization step gave us a dataset (`usage_summary`) with one row per **UserID, scheduled_time,** and **category.** Next up, we want to merge these back into the original ESD so we get one row per beep, one columns for each app category’s usage time and open frequency. To get there we must first pivot wide:
 
 ```{r}
 # Pivot usage_summary to have separate columns for each category
 usage_wide <- usage_summary |>
   pivot_wider(
-    id_cols = c(UserID, survey_number, beep_time),
+    id_cols = c(UserID, survey_number, scheduled_time),
     names_from = better_category,
     values_from = c(total_usage_sec, number_of_opens),
     values_fill = 0 # fill missing with 0
@@ -350,7 +344,7 @@ Finally, we join the wide usage data (one row per beep) to the original ESM data
 ESD_enriched <- ESD_all |>
   left_join(
     usage_wide,
-    by = c("UserID", "survey_number", "beep_time")
+    by = c("UserID", "survey_number", "scheduled_time")
   )
 
 # Preview of final dataset
@@ -396,7 +390,31 @@ ESD_enriched_in_order
 This dataset contains `total_usage_sec_NA`, which is usage of apps that had no app category specified for them. Use it or ignore it at your own discretion.
 :::
 
-### 7. Export the dataset
+### 7. Quality of life helper columns
+
+We add some helper columns here that will help out in the analysis afterwards.
+
+```{r}
+ESD_final <- ESD_enriched_in_order |> 
+  mutate(
+    hour_of_day = hour(scheduled_time) + minute(scheduled_time) / 60 + second(scheduled_time) / 3600,
+    week_day = wday(date, week_start = "Monday"),
+    month_day = mday(date),
+    .before = scheduled_time
+  ) |> 
+  group_by(
+    UserID
+  ) |> 
+  mutate(
+    survey_number_per_user = row_number(),
+    .after = survey_number
+  ) |> 
+  ungroup()
+
+ESD_final
+```
+
+### 8. Export the dataset
 
 Lastly, we export the enriched dataset.
 
@@ -404,7 +422,7 @@ Lastly, we export the enriched dataset.
 # make sure we keep the file name
 filename <- tools::file_path_sans_ext(basename(esm_beeps_file))
 
-ESD_enriched_in_order |> 
+ESD_final |> 
   write_csv(
     paste0("data/output/", filename, "_with_app_usage.csv")
     )
