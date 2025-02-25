@@ -88,8 +88,8 @@ ESD_all <- full_join(
   mutate(
     scheduled_time = str_remove(scheduled_time, " CET$"),
     scheduled_time = as.POSIXct(
-      scheduled_time,
-      format = "%H:%M:%S"
+      paste(date, scheduled_time),
+      format = "%Y-%m-%d %H:%M:%S",
     )
   )
 
