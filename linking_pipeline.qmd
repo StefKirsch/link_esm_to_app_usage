@@ -36,9 +36,10 @@ library(purrr)
 ### 0. Define the test dataset sample
 
 ```{r}
-# Use Inf for the full dataset. 
+# Use Inf for the full dataset.
+max_user_id <- Inf
 # 15000 is a good value to test the workflow for a couple of participants.
-max_user_id <- Inf # Full sample
+#max_user_id <- 15000
 ```
 
 ### 1. Read the ESM dataset
