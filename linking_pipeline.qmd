@@ -360,7 +360,7 @@ ESD_enriched <- ESD_all |>
 ESD_enriched
 ```
 
-Right, we first get all the `total_usage_in_seconds`-columns and then all the `number_of_opens`-columns, which is not ideal. Instead, it would be better to have the columns for both usage metrics per app category next to each other. We can do that by interleaving the usage time `total_usage_in_seconds` columns with the `number_of_opens` columns.
+We initially get all the `total_usage_in_seconds`-columns and then all the `number_of_opens`-columns, which is not ideal. Instead, it would be better to have the columns for both usage metrics per app category next to each other. We can do that by interleaving the usage time `total_usage_in_seconds` columns with the `number_of_opens` columns.
 
 ```{r}
 usage_time_cols <- str_subset(names(ESD_enriched), "total_usage_sec_")
@@ -391,7 +391,7 @@ ESD_enriched_in_order <- ESD_enriched |>
 ESD_enriched_in_order
 ```
 
-`ESD_enriched` is contains the original ESM dataset that is now enriched with the phone usage metrics (by app category) in the hour preceding each beep.
+`ESD_enriched` contains the original ESM dataset that is now enriched with the phone usage metrics (by app category) in the hour preceding each beep.
 
 ::: callout-note
 ## Note
@@ -399,7 +399,7 @@ ESD_enriched_in_order
 This dataset contains `total_usage_sec_NA`, which is usage of apps that had no app category specified for them. Use it or ignore it at your own discretion.
 :::
 
-### 7. Quality of life helper columns
+### 7. Quality-of-life helper columns
 
 We add some helper columns here that will help out in the analysis afterwards.
 
