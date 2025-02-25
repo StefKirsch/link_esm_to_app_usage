@@ -135,14 +135,16 @@ usage_files <- list.files(
 )
 
 # Read all files into one dataframe
-all_usage <- usage_files |>
+all_usage_raw <- usage_files |>
   # read into list of data frames
   map(
     ~ read_csv(.x, show_col_types = FALSE),
     .progress = "Reading participant's app usage data: "
   ) |> 
   # row bind the list
-  list_rbind() |> 
+  list_rbind()
+
+all_usage <- all_usage_raw |> 
   # filter to get to test sample dataset
   filter(UserID <= max_user_id) |> 
   # keep only the columns we need
