@@ -398,8 +398,13 @@ We add some helper columns here that will help out in the analysis afterwards.
 ```{r}
 ESD_final <- ESD_enriched_in_order |> 
   mutate(
-    hour_of_day = hour(scheduled_time) + minute(scheduled_time) / 60 + second(scheduled_time) / 3600,
+    # decimal hour of the day
+    hour_of_day = hour(scheduled_time) + 
+      minute(scheduled_time) / 60 + 
+      second(scheduled_time) / 3600,
+    # integer weekday
     week_day = wday(date, week_start = "Monday"),
+    # integer day of the month
     month_day = mday(date),
     .before = scheduled_time
   ) |> 
