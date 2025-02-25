@@ -162,6 +162,12 @@ all_usage <- all_usage_raw |>
     .after = application,
     .keep = "unused"
   ) |>
+  # add Date column to join by in the next step
+  # we take the date from the start time
+  mutate(
+    date = as.Date(start_time),
+    .after = UserID
+  ) |>
   # Compute usage duration in seconds
   mutate(
     usage_duration_sec = as.numeric(difftime(
@@ -193,12 +199,12 @@ The steps:
 
 We’ll do this by:
 
-1.  Joining `ESD` (which has one row per **beep**) with `all_usage` (which has many rows of phone usage events) **by user**. This results in a many-to-many relationship for the merge, which we need to specify as the `relationship` in `left_join()` to suppress the associated warning.
+1.  Joining `ESD` (which has one row per **beep**) with `all_usage` (which has many rows of phone usage events) **by user and date**. This results in a many-to-many relationship for the merge, which we need to specify as the `relationship` in `left_join()` to suppress the associated warning.
 
 ::: callout-note
 ## Note
 
-This is arguably not very efficient, as we are not only joining app usage rows that are outside of any beep time window, but we're also joining together app usage data for **every beep** of the current user. From a data perspective, that's not a big deal, since we will `filter()` out all app usages that are not within the correct time window in the next step 2. For this dataset, this "lazy" runtime for this joining operation should still be \< 10 min on average hardware, which is really humane, all things considered. The benefit of this "lazy" approach is that the code is much simpler and clearer, which is a win-win for us (the programmers) and people who would want to reproduce this in the future. You are welcome!(?). A drawback is that this step becomes quite memory-intensive, which we will need to address, see below.
+This is arguably not very efficient, as we are not only joining app usage rows that are outside of any beep time window, but we're also joining together app usage data for **every beep** of the current user and day. From a data perspective, that's not a big deal, since we will `filter()` out all app usages that are not within the correct time window in the next step 2. For this dataset, this "lazy" runtime for this joining operation should still be \< 10 min on average hardware, which is really humane, all things considered. The benefit of this "lazy" approach is that the code is much simpler and clearer, which is a win-win for us (the programmers) and people who would want to reproduce this in the future. You are welcome!(?). A drawback is that this step becomes quite memory-intensive, which we will need to address, see below.
 :::
 
 2.  Filtering usage rows to only those between `scheduled_time − 1 hour` and `scheduled_time`.
@@ -215,7 +221,7 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
     # 1) The notorious inefficient join we talked about before. At least we can silence the many-to-many warning by warning dplyr what we will ask it to do here!
     left_join(
     all_usage, 
-    by = "UserID",
+    by = c("UserID", "date"),
     # Politely warn dplyr that this is what we actually want, so it's not trying to talk us out of it...
     relationship = "many-to-many"
     ) |>
