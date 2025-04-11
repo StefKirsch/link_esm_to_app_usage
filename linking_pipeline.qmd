@@ -217,7 +217,7 @@ This is arguably not very efficient, as we are not only joining app usage rows t
 4.  Group by `userID`, `survey_number`, `scheduled_time`, and `better_category`
 5.  Summarizing usage time and event frequency by app category.
 
-Partially because our lazy coding in step 1., we need to do operations 1. to 5. on subsets of the data, as otherwise we need A LOT of RAM. For this, we iterate (`map()`) over chunks of the dataset by `UserID` (so much for simple code...). At least we can put steps 1. to 5. into a nice function that we can then call on the individual data set chunks.
+Partially because of our lazy coding in step 1., we need to do operations 1. to 5. on subsets of the data, as otherwise we need A LOT of RAM. For this, we iterate (`map()`) over chunks of the dataset by `UserID` (so much for simple code...). At least we can put steps 1. to 5. into a nice function that we can then call on the individual data set chunks.
 
 ```{r}
 enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
@@ -244,7 +244,7 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
       # this is a more reasonable relationship that 
       # won't cause a warning anyway, but there is no harm 
       # in telling dplyr what we expect. Also, this way, it will 
-      # tell us if something unexpeted is happening!
+      # tell us if something unexpected is happening!
       relationship = "many-to-one"
     ) |>
     # 4) Do the grouping
