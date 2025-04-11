@@ -8,7 +8,12 @@ editor: visual
 
 > This does not work as we do the operations on the largest possible dataset all at once. What we should do instead, is doing all the operations per participant, so we can go through the app usage beep by beep safely. We can even store the temp intermediate data somewhere to remove it at a later stage. Let's see what works best on my hardware.
 
-This data processing pipeline links ESM data to the phone use data. The goal is a dataset that contains the ESM data per beep and then, for each beep, also the phone use (per smartphone app category) within the hour before the respective beep of the participants.
+This data processing pipeline links ESM data to the phone use data. The goal is a dataset that contains the ESM data per beep and then, for each beep, also the phone use (per smartphone app category) within a chosen **time window** (e.g. 1 hour or 2 hours) before the respective beep of the participants.
+
+```{r}
+# Define the time window. If we change our mind about this we can quickly change it here with near natural language!
+time_window <- hours(2)
+```
 
 The pipeline performs the following steps:
 
@@ -16,7 +21,7 @@ The pipeline performs the following steps:
 2.  Read the app category dataset (ACD), which identifies an app category per specific phone app.
 3.  Read the phone use datasets (PUD) (one file per participant) and merge them into one single dataset.
 4.  For each beep in the ESD:
-    1.  Filter the PUD for all app usage events for that participant **within the allowed time window** (1 hour before the beep).
+    1.  Filter the PUD for all app usage events for that participant **within the allowed time window** (before the beep).
     2.  Apply the app category of each app use to group usage.
     3.  Compute usage time and the frequency of opening apps (per category).
 5.  Merge all processed PUD sub-datasets into one new one.
@@ -193,7 +198,7 @@ Our goal is to create a phone usage summary for each beep in the `ESD`, capturin
 
 The steps:
 
-1.  For each **(UserID, beep)** pair, gather the phone usage within the time interval \[`scheduled_time` − 1 hour, `scheduled_time`\].
+1.  For each **(UserID, beep)** pair, gather the phone usage within the time interval \[`scheduled_time − time window`, `scheduled_time`\].
 2.  Use `app_categories` to link each `application` to its category (we use the `better_category` column).
 3.  Aggregate usage by app category to get total usage time and open frequency in that interval.
 
@@ -207,7 +212,7 @@ We’ll do this by:
 This is arguably not very efficient, as we are not only joining app usage rows that are outside of any beep time window, but we're also joining together app usage data for **every beep** of the current user and day. From a data perspective, that's not a big deal, since we will `filter()` out all app usages that are not within the correct time window in the next step 2. For this dataset, this "lazy" runtime for this joining operation should still be \< 10 min on average hardware, which is really humane, all things considered. The benefit of this "lazy" approach is that the code is much simpler and clearer, which is a win-win for us (the programmers) and people who would want to reproduce this in the future. You are welcome!(?). A drawback is that this step becomes quite memory-intensive, which we will need to address, see below.
 :::
 
-2.  Filtering usage rows to only those between `scheduled_time − 1 hour` and `scheduled_time`.
+2.  Filtering usage rows to only those between `scheduled_time − time_window` and `scheduled_time`.
 3.  Joining with `app_categories` to identify the category for each app.
 4.  Group by `userID`, `survey_number`, `scheduled_time`, and `better_category`
 5.  Summarizing usage time and event frequency by app category.
@@ -268,11 +273,11 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
 ## Note
 
 1.  We used a simple filter logic:
-    -   `start_time >= scheduled_time- 1 hour`
+    -   `start_time >= scheduled_time - time_window`
 
     -   `end_time <= scheduled_time`
 
-        This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `scheduled_time- 1 hour` but ends within the window) at this point.
+        This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `scheduled_time - time_window` but ends within the window) at this point.
 2.  The `number_of_opens` is a naive event count in the sense that it assumes each row in the usage dataset corresponds to one opening of the app.
 :::
 
@@ -286,16 +291,13 @@ ESD_all |>
   enrich_esd_with_psd_per_user(
     PSD = all_usage,
     app_categories = app_categories,
-    time_window = hours(1)
+    time_window = time_window
   )
 ```
 
 Now it's time to stop messing around! We will release our function-Kraken on the full ESD and PSD datasets (oh god help us all!). As explained before, we want to do this on chunks of the dataset. We will follow the same logic as above and create our chunks by `UserID`. Then we can `map()` the function above on the chunks, and then row-bind the resulting list on a dataframe, and ta-da, we get a dataset containing one row for each beep and app usage per category before that beep.
 
 ```{r}
-# Define the time window. If we change our mind about this we can quickly change it here with near natural language!
-time_window <- hours(1)
-
 usage_summary <- ESD_all |>
   # Create the dataset chunks
   group_by(UserID) |> 
@@ -393,7 +395,7 @@ ESD_enriched_in_order <- ESD_enriched |>
 ESD_enriched_in_order
 ```
 
-`ESD_enriched` contains the original ESM dataset that is now enriched with the phone usage metrics (by app category) in the hour preceding each beep.
+`ESD_enriched` contains the original ESM dataset that is now enriched with the phone usage metrics (by app category) in the chosen time window preceding each beep.
 
 ::: callout-note
 ## Note
@@ -443,4 +445,3 @@ ESD_final |>
     paste0("data/output/", filename, "_with_app_usage.csv")
     )
 ```
-
