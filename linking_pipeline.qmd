@@ -4,6 +4,16 @@ format: html
 editor: visual
 ---
 
+```{r}
+# Load libraries
+library(dplyr)
+library(readr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(purrr)
+```
+
 ## Link ESM to Phone Use Data
 
 > This does not work as we do the operations on the largest possible dataset all at once. What we should do instead, is doing all the operations per participant, so we can go through the app usage beep by beep safely. We can even store the temp intermediate data somewhere to remove it at a later stage. Let's see what works best on my hardware.
@@ -27,16 +37,6 @@ The pipeline performs the following steps:
 5.  Merge all processed PUD sub-datasets into one new one.
 6.  Join the ESM dataset with the processed PUD dataset to get the final, enriched dataset.
 7.  Export the ESM dataset to csv.
-
-```{r}
-# Load libraries
-library(dplyr)
-library(readr)
-library(tidyr)
-library(stringr)
-library(lubridate)
-library(purrr)
-```
 
 ### 0. Define the test dataset sample
 
