@@ -269,7 +269,9 @@ enrich_esd_with_psd_per_user <- function(ESD, PSD, app_categories, time_window){
 
 1.  We used a simple filter logic:
     -   `start_time >= scheduled_time- 1 hour`
-    -   `end_time <=``scheduled_time`\
+
+    -   `end_time <= scheduled_time`
+
         This assumes an app session that starts or ends entirely within that window. We do not consider partial overlaps (e.g., a session that starts before `scheduled_time- 1 hour` but ends within the window) at this point.
 2.  The `number_of_opens` is a naive event count in the sense that it assumes each row in the usage dataset corresponds to one opening of the app.
 :::
@@ -441,3 +443,4 @@ ESD_final |>
     paste0("data/output/", filename, "_with_app_usage.csv")
     )
 ```
+
